@@ -66,9 +66,10 @@
   </div>
 
   <script>
-    // === CSV LINKS (punya kamu) ===
-    const SHEET_CANDLES = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1706276702&single=true&output=csv";
-    const SHEET_SIGNALS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1760384152&single=true&output=csv";
+    // === CSV LINKS (pakai export?format=csv) ===
+    const SHEET_ID = "1W_AOr_oATVQpmbbHh1agM42Wu8i5pJgqL3CUroyYLoM";
+    const SHEET_CANDLES = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=1706276702`;
+    const SHEET_SIGNALS = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=1760384152`;
 
     // ---- Helpers ----
     function showDebug(id, title, content){
@@ -77,149 +78,137 @@
       el.textContent = `${title}\n${content}`;
     }
 
-    function headerIndex(headers, nameCandidates){
-      // cari kolom berdasar nama (case-insensitive), dukung variasi
-      const idx = headers.findIndex(h => {
-        const x = (h||"").toString().trim().toLowerCase();
-        return nameCandidates.some(n => x === n);
-      });
-      return idx >= 0 ? idx : null;
-    }
-
-    async function parseCSV(url){
+    async function parseCSV(url, debugId){
       const res = await fetch(url, { cache: "no-store" });
-      if(!res.ok) throw new Error(`HTTP ${res.status}`);
-      const text = await res.text();
+      const txt = await res.text();
+      if(!res.ok){ showDebug(debugId, `HTTP ${res.status}`, txt.slice(0,400)); throw new Error(`HTTP ${res.status}`); }
+      // preview 3 baris pertama
+      showDebug(debugId, "CSV preview (3 rows):", txt.split("\n").slice(0,3).join("\n"));
       return new Promise((resolve, reject) => {
-        Papa.parse(text, {
-          header: true,
-          skipEmptyLines: true,
-          complete: (r)=> resolve(r.data),
-          error: reject
+        Papa.parse(txt, {
+          header: true, skipEmptyLines: true,
+          complete: r => resolve(r.data),
+          error: err => reject(err)
         });
       });
     }
 
-    // ---- Render CANDLES ----
+    function colIdx(headers, names){
+      const lower = headers.map(h=> (h||"").toString().trim().toLowerCase());
+      const i = lower.findIndex(h => names.includes(h));
+      return i >= 0 ? i : null;
+    }
+
+    // ---- Candles ----
     async function loadCandles(){
       try{
-        const rows = await parseCSV(SHEET_CANDLES);
-        if(!rows || rows.length === 0) throw new Error("Candles CSV kosong");
+        const rows = await parseCSV(SHEET_CANDLES, "candleDebug");
+        if(!rows.length) throw new Error("Candles CSV kosong");
+        const headers = Object.keys(rows[0]).map(h=>h.trim());
+        const get = i => headers[i];
 
-        // normalisasi nama kolom
-        const headers = Object.keys(rows[0]).map(h => h.trim());
-        const colTime = headerIndex(headers.map(h=>h.toLowerCase()), ["time","timestamp","date"]);
-        const colOpen = headerIndex(headers.map(h=>h.toLowerCase()), ["open","o"]);
-        const colHigh = headerIndex(headers.map(h=>h.toLowerCase()), ["high","h"]);
-        const colLow  = headerIndex(headers.map(h=>h.toLowerCase()), ["low","l"]);
-        const colClose= headerIndex(headers.map(h=>h.toLowerCase()), ["close","c","price"]);
+        const iTime  = colIdx(headers, ["time","timestamp","date"]);
+        const iOpen  = colIdx(headers, ["open","o"]);
+        const iHigh  = colIdx(headers, ["high","h"]);
+        const iLow   = colIdx(headers, ["low","l"]);
+        const iClose = colIdx(headers, ["close","c","price"]);
 
-        if([colTime,colOpen,colHigh,colLow,colClose].some(x=>x===null)){
-          showDebug("candleDebug","Candles - Header tidak cocok:",
-            `Headers:\n${headers.join(", ")}\n\nButuh minimal: time, open, high, low, close`);
+        if([iTime,iOpen,iHigh,iLow,iClose].some(v=>v===null)){
+          showDebug("candleDebug","Candles - Header tidak cocok", headers.join(", "));
           return;
         }
 
-        const key = (i)=> headers[i];
-        const candles = rows.map(r => ({
-          x: new Date(r[key(colTime)]),
-          o: +r[key(colOpen)],
-          h: +r[key(colHigh)],
-          l: +r[key(colLow)],
-          c: +r[key(colClose)]
-        })).filter(v => isFinite(v.o)&&isFinite(v.h)&&isFinite(v.l)&&isFinite(v.c));
+        const data = rows.map(r=>({
+          x: new Date(r[get(iTime)]),
+          o: +r[get(iOpen)], h: +r[get(iHigh)], l: +r[get(iLow)], c: +r[get(iClose)]
+        })).filter(v=>isFinite(v.o)&&isFinite(v.h)&&isFinite(v.l)&&isFinite(v.c));
 
         const ctx = document.getElementById("candleChart").getContext("2d");
         if(window.candleChart) window.candleChart.destroy();
         window.candleChart = new Chart(ctx, {
           type: 'candlestick',
-          data: { datasets: [{ label: "Candles", data: candles }] },
+          data: { datasets: [{ label: "Candles", data }] },
           options: {
             responsive: true,
-            plugins: { legend: { display: false }, tooltip:{mode:'index', intersect:false} },
+            plugins: { legend: { display:false } },
             scales: {
-              x: { type: 'time', ticks:{ color:"#94a3b8"}, grid:{ color:"#334155"} },
-              y: { ticks:{ color:"#94a3b8"}, grid:{ color:"#334155"} }
+              x: { type:'time', ticks:{ color:"#94a3b8" }, grid:{ color:"#334155" } },
+              y: { ticks:{ color:"#94a3b8" }, grid:{ color:"#334155" } }
             }
           }
         });
-      }catch(err){
-        showDebug("candleDebug","Candles - Error:", String(err));
+      }catch(e){
+        showDebug("candleDebug","Candles Error:", String(e));
       }
     }
 
-    // ---- Render SIGNALS ----
+    // ---- Signals ----
     async function loadSignals(){
       try{
-        const rows = await parseCSV(SHEET_SIGNALS);
-        if(!rows || rows.length === 0) throw new Error("Signals CSV kosong");
+        const rows = await parseCSV(SHEET_SIGNALS, "signalsDebug");
+        if(!rows.length) throw new Error("Signals CSV kosong");
+        const headers = Object.keys(rows[0]).map(h=>h.trim());
+        const get = i => headers[i];
 
-        const headers = Object.keys(rows[0]).map(h => h.trim());
-        const lower = headers.map(h=>h.toLowerCase());
-
-        const ci = {
-          time:  headerIndex(lower, ["time","timestamp","date"]),
-          pair:  headerIndex(lower, ["pair","symbol"]),
-          side:  headerIndex(lower, ["side","dir","direction"]),
-          price: headerIndex(lower, ["price","entry","close"]),
-          sl:    headerIndex(lower, ["sl","stop","stoploss","stop_loss"]),
-          tp1:   headerIndex(lower, ["tp1","takeprofit1","take_profit_1"]),
-          tp2:   headerIndex(lower, ["tp2","takeprofit2","take_profit_2"]),
-          tp3:   headerIndex(lower, ["tp3","takeprofit3","take_profit_3"]),
-          score: headerIndex(lower, ["score"]),
-          rsi:   headerIndex(lower, ["rsi"]),
-          vol:   headerIndex(lower, ["vol_ratio","vol","volume_ratio"]),
-          note:  headerIndex(lower, ["note","notes","remarks"])
+        const idx = {
+          time:  colIdx(headers, ["time","timestamp","date"]),
+          pair:  colIdx(headers, ["pair","symbol"]),
+          side:  colIdx(headers, ["side","dir","direction"]),
+          price: colIdx(headers, ["price","entry"]),
+          sl:    colIdx(headers, ["sl","stop","stoploss","stop_loss"]),
+          tp1:   colIdx(headers, ["tp1","takeprofit1","take_profit_1"]),
+          tp2:   colIdx(headers, ["tp2","takeprofit2","take_profit_2"]),
+          tp3:   colIdx(headers, ["tp3","takeprofit3","take_profit_3"]),
+          score: colIdx(headers, ["score"]),
+          rsi:   colIdx(headers, ["rsi"]),
+          vol:   colIdx(headers, ["vol_ratio","vol","volume_ratio"]),
+          note:  colIdx(headers, ["note","notes","remarks"])
         };
 
-        const need = ["time","pair","side","price","sl","tp1","tp2","tp3","score","rsi","vol","note"];
-        if (need.some(k => ci[k]===null)){
-          showDebug("signalsDebug","Signals - Header tidak cocok:",
-            `Headers:\n${headers.join(", ")}\n\nButuh kolom (nama boleh bervariasi):\n${need.join(", ")}`);
+        if (Object.values(idx).some(v=>v===null)){
+          showDebug("signalsDebug","Signals - Header tidak cocok", headers.join(", "));
           return;
         }
 
-        // isi detail aktif (row terakhir)
-        const key = (i)=> headers[i];
+        // detail aktif
         const last = rows[rows.length-1];
         document.getElementById("signalDetail").innerHTML = `
-          <b>Pair:</b> ${last[key(ci.pair)]}<br/>
-          <b>Side:</b> <span class="${String(last[key(ci.side)]).toUpperCase()==="BUY"?"buy":"sell"}">${last[key(ci.side)]}</span><br/>
-          <b>Entry:</b> ${last[key(ci.price)]} &nbsp; | &nbsp; <b>SL:</b> ${last[key(ci.sl)]}<br/>
-          <b>TP1:</b> ${last[key(ci.tp1)]} &nbsp; <b>TP2:</b> ${last[key(ci.tp2)]} &nbsp; <b>TP3:</b> ${last[key(ci.tp3)]}<br/>
-          <b>Score:</b> ${last[key(ci.score)]} &nbsp; | &nbsp; <b>RSI:</b> ${last[key(ci.rsi)]} &nbsp; | &nbsp; <b>Vol:</b> ${last[key(ci.vol)]}<br/>
-          <b>Note:</b> ${last[key(ci.note)]}
+          <b>Pair:</b> ${last[get(idx.pair)]}<br/>
+          <b>Side:</b> <span class="${String(last[get(idx.side)]).toUpperCase()==="BUY"?"buy":"sell"}">${last[get(idx.side)]}</span><br/>
+          <b>Entry:</b> ${last[get(idx.price)]} &nbsp; | &nbsp; <b>SL:</b> ${last[get(idx.sl)]}<br/>
+          <b>TP1:</b> ${last[get(idx.tp1)]} &nbsp; <b>TP2:</b> ${last[get(idx.tp2)]} &nbsp; <b>TP3:</b> ${last[get(idx.tp3)]}<br/>
+          <b>Score:</b> ${last[get(idx.score)]} &nbsp; | &nbsp; <b>RSI:</b> ${last[get(idx.rsi)]} &nbsp; | &nbsp; <b>Vol:</b> ${last[get(idx.vol)]}<br/>
+          <b>Note:</b> ${last[get(idx.note)]}
         `;
 
-        // isi tabel (10 terbaru)
+        // tabel 10 terbaru
         const tbody = document.querySelector("#signalTable tbody");
         tbody.innerHTML = "";
-        const latest = rows.slice(-10).reverse();
-        for (const r of latest){
+        rows.slice(-10).reverse().forEach(r=>{
+          const sideVal = String(r[get(idx.side)]).toUpperCase();
           const tr = document.createElement("tr");
-          const sideVal = String(r[key(ci.side)]).toUpperCase();
           tr.innerHTML = `
-            <td>${r[key(ci.time)]}</td>
-            <td>${r[key(ci.pair)]}</td>
-            <td class="${sideVal==="BUY"?"buy":"sell"}">${r[key(ci.side)]}</td>
-            <td>${r[key(ci.price)]}</td>
-            <td>${r[key(ci.sl)]}</td>
-            <td>${r[key(ci.tp1)]}</td>
-            <td>${r[key(ci.tp2)]}</td>
-            <td>${r[key(ci.tp3)]}</td>
-            <td>${r[key(ci.score)]}</td>
-            <td>${r[key(ci.rsi)]}</td>
-            <td>${r[key(ci.vol)]}</td>
-            <td>${r[key(ci.note)]}</td>
+            <td>${r[get(idx.time)]}</td>
+            <td>${r[get(idx.pair)]}</td>
+            <td class="${sideVal==="BUY"?"buy":"sell"}">${r[get(idx.side)]}</td>
+            <td>${r[get(idx.price)]}</td>
+            <td>${r[get(idx.sl)]}</td>
+            <td>${r[get(idx.tp1)]}</td>
+            <td>${r[get(idx.tp2)]}</td>
+            <td>${r[get(idx.tp3)]}</td>
+            <td>${r[get(idx.score)]}</td>
+            <td>${r[get(idx.rsi)]}</td>
+            <td>${r[get(idx.vol)]}</td>
+            <td>${r[get(idx.note)]}</td>
           `;
           tbody.appendChild(tr);
-        }
+        });
 
         document.getElementById("signalsHint").textContent = "";
-      }catch(err){
+      }catch(e){
         document.getElementById("signalsHint").textContent =
           "⚠️ Gagal memuat 'Signals'. Pastikan link CSV benar & public.";
-        showDebug("signalsDebug","Signals - Error:", String(err));
+        showDebug("signalsDebug","Signals Error:", String(e));
       }
     }
 
