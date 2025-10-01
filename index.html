@@ -4,11 +4,15 @@
   <meta charset="UTF-8" />
   <title>Mini Signal Bot Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <!-- Chart.js + financial plugin -->
+  <!-- Chart.js + time adapter + financial plugin -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@3.3.0"></script>
   <script>
+    // Register scales & financial controller
+    const { TimeScale, LinearScale, Tooltip, Legend } = Chart;
     Chart.register(
+      TimeScale, LinearScale, Tooltip, Legend,
       window['chartjs-chart-financial'].CandlestickController,
       window['chartjs-chart-financial'].CandlestickElement
     );
@@ -60,16 +64,16 @@
 
   <script>
     // === CSV LINKS ===
-    // Candles (SUDAH DIISI dari kamu):
-    const SHEET_CANDLES = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1706276702&single=true&output=csv";
-    // Signals (GANTI dengan link CSV tab 'Signals' kamu):
-    const SHEET_SIGNALS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1760384152&single=true&output=csv"; // contoh: "https://docs.google.com/...&gid=XXXX&output=csv"
+    // NOTE: pastikan yang Candles = tab berisi kolom time,open,high,low,close
+    // dan Signals = tab berisi histori sinyal.
+    const SHEET_CANDLES = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1760384152&single=true&output=csv"; // <-- gunakan gid Candles yang benar
+    const SHEET_SIGNALS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1706276702&single=true&output=csv"; // <-- ganti ke gid Signals kamu
 
     async function loadCSV(url){
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) throw new Error(`Fetch ${url} -> ${res.status}`);
       const text = await res.text();
-      // dukung baris yang mengandung koma di dalam kutip
+      // parser CSV aman utk koma dalam kutip
       const rows = [];
       let cur = "", inQ = false, row = [];
       for (let i=0;i<text.length;i++){
@@ -78,13 +82,12 @@
         if (!inQ && ch === ","){ row.push(cur.replace(/^"|"$/g,"")); cur=""; continue; }
         if (!inQ && (ch === "\n" || (ch === "\r" && nxt === "\n"))){
           row.push(cur.replace(/^"|"$/g,"")); rows.push(row); row=[]; cur="";
-          if (ch==="\r") i++; // lewati \n setelah \r
-          continue;
+          if (ch==="\r") i++; continue;
         }
         cur += ch;
       }
       if (cur.length || row.length){ row.push(cur.replace(/^"|"$/g,"")); rows.push(row); }
-      return rows.filter(r => r.some(x => x!== ""));
+      return rows.filter(r => r.some(x => x!==""));
     }
 
     function renderTable(rows){
@@ -93,7 +96,7 @@
       if (!rows || rows.length < 2) return;
       const latest = rows.slice(1).reverse().slice(0,10);
       for (const r of latest){
-        // indeks kolom mengikuti format: time, pair, side, price, atr, sl, tp1, tp2, tp3, score, rsi, macd_hist, vol_ratio, note, alerted
+        // format: time, pair, side, price, atr, sl, tp1, tp2, tp3, score, rsi, macd_hist, vol_ratio, note, alerted
         if (r.length < 14) continue;
         const tr = document.createElement("tr");
         tr.innerHTML = `
@@ -143,7 +146,7 @@
           responsive: true,
           plugins: { legend: { display: false } },
           scales: {
-            x: { ticks:{ color:"#94a3b8"}, grid:{ color:"#334155"} },
+            x: { type: 'time', ticks:{ color:"#94a3b8"}, grid:{ color:"#334155"} },
             y: { ticks:{ color:"#94a3b8"}, grid:{ color:"#334155"} }
           }
         }
@@ -151,18 +154,22 @@
     }
 
     async function refresh(){
-      const [candleRows, signalRows] = await Promise.all([
-        loadCSV(SHEET_CANDLES),
-        SHEET_SIGNALS ? loadCSV(SHEET_SIGNALS).catch(()=>null) : Promise.resolve(null)
-      ]);
-      renderCandle(candleRows);
-      if (signalRows){
-        renderTable(signalRows);
-        renderActiveFromSignals(signalRows);
+      try{
+        const candles = await loadCSV(SHEET_CANDLES);
+        renderCandle(candles);
+      }catch(e){
+        console.error("Candles CSV error:", e);
+      }
+
+      try{
+        const signals = await loadCSV(SHEET_SIGNALS);
+        renderTable(signals);
+        renderActiveFromSignals(signals);
         document.getElementById("signalsHint").textContent = "";
-      } else {
+      }catch(e){
+        console.warn("Signals CSV error:", e);
         document.getElementById("signalsHint").textContent =
-          "⚠️ Link CSV untuk tab 'Signals' belum diisi. Publish tab 'Signals' → CSV, lalu set SHEET_SIGNALS di atas.";
+          "⚠️ Gagal memuat 'Signals'. Pastikan link CSV benar & public.";
       }
     }
 
