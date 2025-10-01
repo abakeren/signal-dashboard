@@ -4,20 +4,38 @@
   <meta charset="UTF-8" />
   <title>Mini Signal Bot Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <!-- Libs -->
+
+  <!-- Chart.js core -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
+  <!-- Time adapter (agar scale 'time' jalan) -->
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@3.3.0"></script>
+  <!-- Financial plugin (WAJIB pakai dist/*.min.js) -->
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@3.3.0/dist/chartjs-chart-financial.min.js"></script>
+  <!-- CSV parser -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
   <script>
+    // Register semua kebutuhan Chart.js
     const { TimeScale, LinearScale, Tooltip, Legend } = Chart;
-    Chart.register(
-      TimeScale, LinearScale, Tooltip, Legend,
-      window['chartjs-chart-financial'].CandlestickController,
-      window['chartjs-chart-financial'].CandlestickElement
-    );
-    window.candleChart = null; // sentinel
+    Chart.register(TimeScale, LinearScale, Tooltip, Legend);
+
+    // Register financial controllers/elements
+    (function registerFinancial(){
+      const F = window['chartjs-chart-financial'];
+      if (F && F.CandlestickController) {
+        Chart.register(
+          F.CandlestickController, F.CandlestickElement,
+          F.OhlcController,        F.OhlcElement
+        );
+      } else {
+        console.error('Financial plugin gagal dimuat.');
+      }
+    })();
+
+    // sentinel chart instance
+    window.candleChart = null;
   </script>
+
   <style>
     :root { --bg:#0f172a; --card:#1e293b; --line:#334155; --muted:#94a3b8; --text:#f8fafc; --buy:#22c55e; --sell:#ef4444; }
     *{box-sizing:border-box}
@@ -40,6 +58,7 @@
   <div class="wrap grid">
     <h1>📊 Mini Signal Bot Dashboard</h1>
 
+    <!-- Active Signal -->
     <div class="card">
       <h2>Active Signal</h2>
       <canvas id="candleChart" height="220"></canvas>
@@ -47,6 +66,7 @@
       <div id="candleDebug" class="debug"></div>
     </div>
 
+    <!-- Table -->
     <div class="card">
       <h2>Top 10 Signals</h2>
       <table id="signalTable">
@@ -65,52 +85,87 @@
   </div>
 
   <script>
-    // === PUBLISH-TO-WEB CSV LINKS (punyamu) ===
-    const SHEET_CANDLES = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1706276702&single=true&output=csv";
-    const SHEET_SIGNALS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1760384152&single=true&output=csv";
+    // ================== CONFIG LINK ==================
+    // Gunakan Publish-to-Web CSV (aman untuk fetch) + fallback gviz
+    const SHEET_ID = "1W_AOr_oATVQpmbbHh1agM42Wu8i5pJgqL3CUroyYLoM";
 
-    // --- Utils ---
-    function showDebug(id, title, content){
-      const el = document.getElementById(id);
-      el.style.display = 'block';
-      el.textContent = `${title}\n${content}`;
+    const URLS = {
+      candles: [
+        `https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1706276702&single=true&output=csv`,
+        `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=1706276702`,
+      ],
+      signals: [
+        `https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1760384152&single=true&output=csv`,
+        `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=1760384152`,
+      ]
+    };
+
+    // ================== HELPERS ==================
+    async function fetchTextWithFallback(urls) {
+      const proxies = [
+        null,
+        (u)=>`https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+        (u)=>`https://thingproxy.freeboard.io/fetch/${u}`,
+      ];
+      let lastErr;
+      for (const url of urls) {
+        for (const p of proxies) {
+          const finalUrl = p ? p(url) : url;
+          try {
+            const res = await fetch(finalUrl, { cache: "no-store" });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return await res.text();
+          } catch (e) { lastErr = e; }
+        }
+      }
+      throw lastErr || new Error("fetch failed");
     }
-    async function parseCSV(url, debugId){
-      const res = await fetch(url, { cache: "no-store" });
-      const txt = await res.text();
-      if(!res.ok){ showDebug(debugId, `HTTP ${res.status}`, txt.slice(0,300)); throw new Error(`HTTP ${res.status}`); }
+
+    async function parseCSVFrom(urlList, debugId){
+      const txt = await fetchTextWithFallback(urlList);
+      // tampilkan preview 3 baris di debug box
+      const dbg = document.getElementById(debugId);
+      if (dbg) { dbg.style.display = 'block'; dbg.textContent = `CSV preview:\n${txt.split("\n").slice(0,3).join("\n")}`; }
       return new Promise((resolve, reject) => {
         Papa.parse(txt, { header:true, skipEmptyLines:true, complete:r=>resolve(r.data), error:reject });
       });
     }
+
     function colIdx(headers, names){
       const lower = headers.map(h=> (h||"").toString().trim().toLowerCase());
       const i = lower.findIndex(h => names.includes(h));
       return i>=0 ? i : null;
     }
 
-    // --- Candles ---
+    // ================== CANDLES ==================
     async function loadCandles(){
       try{
-        const rows = await parseCSV(SHEET_CANDLES, "candleDebug");
+        const rows = await parseCSVFrom(URLS.candles, "candleDebug");
         if(!rows.length) throw new Error("Candles CSV kosong");
+
         const headers = Object.keys(rows[0]).map(h=>h.trim());
         const get = i => headers[i];
+
         const iTime  = colIdx(headers, ["time","timestamp","date"]);
         const iOpen  = colIdx(headers, ["open","o"]);
         const iHigh  = colIdx(headers, ["high","h"]);
         const iLow   = colIdx(headers, ["low","l"]);
         const iClose = colIdx(headers, ["close","c","price"]);
+
         if([iTime,iOpen,iHigh,iLow,iClose].some(v=>v===null)){
-          showDebug("candleDebug","Candles header tidak cocok", headers.join(", "));
+          document.getElementById("candleDebug").textContent =
+            "Candles header tidak cocok.\nHeaders: " + headers.join(", ");
           return;
         }
+
         const data = rows.map(r=>({
           x:new Date(r[get(iTime)]),
           o:+r[get(iOpen)], h:+r[get(iHigh)], l:+r[get(iLow)], c:+r[get(iClose)]
         })).filter(v=>isFinite(v.o)&&isFinite(v.h)&&isFinite(v.l)&&isFinite(v.c));
+
         const ctx = document.getElementById("candleChart").getContext("2d");
         if (window.candleChart && typeof window.candleChart.destroy === "function") window.candleChart.destroy();
+
         window.candleChart = new Chart(ctx, {
           type:'candlestick',
           data:{ datasets:[{ label:"Candles", data }] },
@@ -123,30 +178,38 @@
             }
           }
         });
-      }catch(e){ showDebug("candleDebug","Candles Error:", String(e)); }
+      }catch(e){
+        const dbg = document.getElementById("candleDebug");
+        dbg.style.display = 'block';
+        dbg.textContent = "Candles Error:\n" + String(e);
+      }
     }
 
-    // --- Signals ---
+    // ================== SIGNALS ==================
     async function loadSignals(){
       try{
-        const rows = await parseCSV(SHEET_SIGNALS, "signalsDebug");
+        const rows = await parseCSVFrom(URLS.signals, "signalsDebug");
         if(!rows.length) throw new Error("Signals CSV kosong");
+
         const headers = Object.keys(rows[0]).map(h=>h.trim());
         const get = i => headers[i];
+
         const idx = {
-          time:colIdx(headers,["time","timestamp","date"]),
-          pair:colIdx(headers,["pair","symbol"]),
-          side:colIdx(headers,["side","dir","direction"]),
-          price:colIdx(headers,["price","entry"]),
-          sl:colIdx(headers,["sl","stop","stoploss","stop_loss"]),
-          tp1:colIdx(headers,["tp1","takeprofit1","take_profit_1"]),
-          tp2:colIdx(headers,["tp2","takeprofit2","take_profit_2"]),
-          tp3:colIdx(headers,["tp3","takeprofit3","take_profit_3"]),
-          score:colIdx(headers,["score"]),
-          rsi:colIdx(headers,["rsi"]),
-          vol:colIdx(headers,["vol_ratio","vol","volume_ratio"]),
-          note:colIdx(headers,["note","notes","remarks"])
+          time:  colIdx(headers,["time","timestamp","date"]),
+          pair:  colIdx(headers,["pair","symbol"]),
+          side:  colIdx(headers,["side","dir","direction"]),
+          price: colIdx(headers,["price","entry"]),
+          sl:    colIdx(headers,["sl","stop","stoploss","stop_loss"]),
+          tp1:   colIdx(headers,["tp1","takeprofit1","take_profit_1"]),
+          tp2:   colIdx(headers,["tp2","takeprofit2","take_profit_2"]),
+          tp3:   colIdx(headers,["tp3","takeprofit3","take_profit_3"]),
+          score: colIdx(headers,["score"]),
+          rsi:   colIdx(headers,["rsi"]),
+          vol:   colIdx(headers,["vol_ratio","vol","volume_ratio"]),
+          note:  colIdx(headers,["note","notes","remarks"])
         };
+
+        // Detail aktif
         const last = rows[rows.length-1];
         document.getElementById("signalDetail").innerHTML = `
           <b>Pair:</b> ${last[get(idx.pair)]}<br/>
@@ -156,6 +219,8 @@
           <b>Score:</b> ${last[get(idx.score)]} &nbsp; | &nbsp; <b>RSI:</b> ${last[get(idx.rsi)]} &nbsp; | &nbsp; <b>Vol:</b> ${last[get(idx.vol)]}<br/>
           <b>Note:</b> ${last[get(idx.note)]}
         `;
+
+        // Tabel 10 terbaru
         const tbody = document.querySelector("#signalTable tbody");
         tbody.innerHTML = "";
         rows.slice(-10).reverse().forEach(r=>{
@@ -177,16 +242,19 @@
           `;
           tbody.appendChild(tr);
         });
+
         document.getElementById("signalsHint").textContent = "";
       }catch(e){
-        document.getElementById("signalsHint").textContent = "⚠️ Gagal memuat 'Signals'. Pastikan link CSV benar & public.";
-        showDebug("signalsDebug","Signals Error:", String(e));
+        document.getElementById("signalsHint").textContent = "⚠️ Gagal memuat 'Signals'.";
+        const dbg = document.getElementById("signalsDebug");
+        dbg.style.display = 'block';
+        dbg.textContent = "Signals Error:\n" + String(e);
       }
     }
 
     async function refresh(){ await Promise.all([loadCandles(), loadSignals()]); }
     refresh();
-    setInterval(refresh, 60000);
+    setInterval(refresh, 60_000);
   </script>
 </body>
 </html>
