@@ -4,12 +4,12 @@
   <meta charset="UTF-8" />
   <title>Mini Signal Bot Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <!-- Chart.js + time adapter + financial plugin -->
+  <!-- Libs -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@3.3.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <script>
-    // Register scales & financial controller
     const { TimeScale, LinearScale, Tooltip, Legend } = Chart;
     Chart.register(
       TimeScale, LinearScale, Tooltip, Legend,
@@ -32,6 +32,7 @@
     th{background:var(--card)}
     tr:nth-child(even){background:var(--card)}
     .muted{color:var(--muted)}
+    .debug{white-space:pre-wrap;font-family:ui-monospace,Consolas,monospace;background:#0b1222;border:1px solid #27354d;border-radius:8px;padding:10px;color:#cbd5e1}
   </style>
 </head>
 <body>
@@ -43,6 +44,7 @@
       <h2>Active Signal</h2>
       <canvas id="candleChart" height="220"></canvas>
       <div id="signalDetail" class="muted" style="margin-top:12px;"></div>
+      <div id="candleDebug" class="debug" style="margin-top:10px;display:none"></div>
     </div>
 
     <!-- Table -->
@@ -59,118 +61,170 @@
         <tbody></tbody>
       </table>
       <div id="signalsHint" class="muted" style="margin-top:8px;"></div>
+      <div id="signalsDebug" class="debug" style="margin-top:10px;display:none"></div>
     </div>
   </div>
 
   <script>
-    // === CSV LINKS ===
-    // NOTE: pastikan yang Candles = tab berisi kolom time,open,high,low,close
-    // dan Signals = tab berisi histori sinyal.
-    const SHEET_CANDLES = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1760384152&single=true&output=csv"; // <-- gunakan gid Candles yang benar
-    const SHEET_SIGNALS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1706276702&single=true&output=csv"; // <-- ganti ke gid Signals kamu
+    // === CSV LINKS (punya kamu) ===
+    const SHEET_CANDLES = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1706276702&single=true&output=csv";
+    const SHEET_SIGNALS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1760384152&single=true&output=csv";
 
-    async function loadCSV(url){
+    // ---- Helpers ----
+    function showDebug(id, title, content){
+      const el = document.getElementById(id);
+      el.style.display = 'block';
+      el.textContent = `${title}\n${content}`;
+    }
+
+    function headerIndex(headers, nameCandidates){
+      // cari kolom berdasar nama (case-insensitive), dukung variasi
+      const idx = headers.findIndex(h => {
+        const x = (h||"").toString().trim().toLowerCase();
+        return nameCandidates.some(n => x === n);
+      });
+      return idx >= 0 ? idx : null;
+    }
+
+    async function parseCSV(url){
       const res = await fetch(url, { cache: "no-store" });
-      if (!res.ok) throw new Error(`Fetch ${url} -> ${res.status}`);
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
       const text = await res.text();
-      // parser CSV aman utk koma dalam kutip
-      const rows = [];
-      let cur = "", inQ = false, row = [];
-      for (let i=0;i<text.length;i++){
-        const ch = text[i], nxt = text[i+1];
-        if (ch === '"'){ inQ = !inQ; cur += ch; continue; }
-        if (!inQ && ch === ","){ row.push(cur.replace(/^"|"$/g,"")); cur=""; continue; }
-        if (!inQ && (ch === "\n" || (ch === "\r" && nxt === "\n"))){
-          row.push(cur.replace(/^"|"$/g,"")); rows.push(row); row=[]; cur="";
-          if (ch==="\r") i++; continue;
-        }
-        cur += ch;
-      }
-      if (cur.length || row.length){ row.push(cur.replace(/^"|"$/g,"")); rows.push(row); }
-      return rows.filter(r => r.some(x => x!==""));
-    }
-
-    function renderTable(rows){
-      const tbody = document.querySelector("#signalTable tbody");
-      tbody.innerHTML = "";
-      if (!rows || rows.length < 2) return;
-      const latest = rows.slice(1).reverse().slice(0,10);
-      for (const r of latest){
-        // format: time, pair, side, price, atr, sl, tp1, tp2, tp3, score, rsi, macd_hist, vol_ratio, note, alerted
-        if (r.length < 14) continue;
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td>${r[0]}</td>
-          <td>${r[1]}</td>
-          <td class="${r[2]==="BUY"?"buy":"sell"}">${r[2]}</td>
-          <td>${r[3]}</td>
-          <td>${r[5]}</td>
-          <td>${r[6]}</td>
-          <td>${r[7]}</td>
-          <td>${r[8]}</td>
-          <td>${r[9]}</td>
-          <td>${r[10]}</td>
-          <td>${r[12]}</td>
-          <td>${r[13]}</td>
-        `;
-        tbody.appendChild(tr);
-      }
-    }
-
-    function renderActiveFromSignals(rows){
-      if (!rows || rows.length < 2) return;
-      const last = rows[rows.length-1];
-      if (!last || last.length < 14) return;
-      document.getElementById("signalDetail").innerHTML = `
-        <b>Pair:</b> ${last[1]}<br/>
-        <b>Side:</b> <span class="${last[2]==="BUY"?"buy":"sell"}">${last[2]}</span><br/>
-        <b>Entry:</b> ${last[3]} &nbsp; | &nbsp; <b>SL:</b> ${last[5]}<br/>
-        <b>TP1:</b> ${last[6]} &nbsp; <b>TP2:</b> ${last[7]} &nbsp; <b>TP3:</b> ${last[8]}<br/>
-        <b>Score:</b> ${last[9]} &nbsp; | &nbsp; <b>RSI:</b> ${last[10]} &nbsp; | &nbsp; <b>Vol:</b> ${last[12]}<br/>
-        <b>Note:</b> ${last[13]}
-      `;
-    }
-
-    function renderCandle(candleRows){
-      if (!candleRows || candleRows.length < 2) return;
-      const candles = candleRows.slice(1).map(r => ({
-        x: new Date(r[0]),
-        o: +r[1], h: +r[2], l: +r[3], c: +r[4]
-      }));
-      const ctx = document.getElementById("candleChart").getContext("2d");
-      if (window.candleChart) window.candleChart.destroy();
-      window.candleChart = new Chart(ctx, {
-        type: 'candlestick',
-        data: { datasets: [{ label: "Candles", data: candles }] },
-        options: {
-          responsive: true,
-          plugins: { legend: { display: false } },
-          scales: {
-            x: { type: 'time', ticks:{ color:"#94a3b8"}, grid:{ color:"#334155"} },
-            y: { ticks:{ color:"#94a3b8"}, grid:{ color:"#334155"} }
-          }
-        }
+      return new Promise((resolve, reject) => {
+        Papa.parse(text, {
+          header: true,
+          skipEmptyLines: true,
+          complete: (r)=> resolve(r.data),
+          error: reject
+        });
       });
     }
 
-    async function refresh(){
+    // ---- Render CANDLES ----
+    async function loadCandles(){
       try{
-        const candles = await loadCSV(SHEET_CANDLES);
-        renderCandle(candles);
-      }catch(e){
-        console.error("Candles CSV error:", e);
-      }
+        const rows = await parseCSV(SHEET_CANDLES);
+        if(!rows || rows.length === 0) throw new Error("Candles CSV kosong");
 
+        // normalisasi nama kolom
+        const headers = Object.keys(rows[0]).map(h => h.trim());
+        const colTime = headerIndex(headers.map(h=>h.toLowerCase()), ["time","timestamp","date"]);
+        const colOpen = headerIndex(headers.map(h=>h.toLowerCase()), ["open","o"]);
+        const colHigh = headerIndex(headers.map(h=>h.toLowerCase()), ["high","h"]);
+        const colLow  = headerIndex(headers.map(h=>h.toLowerCase()), ["low","l"]);
+        const colClose= headerIndex(headers.map(h=>h.toLowerCase()), ["close","c","price"]);
+
+        if([colTime,colOpen,colHigh,colLow,colClose].some(x=>x===null)){
+          showDebug("candleDebug","Candles - Header tidak cocok:",
+            `Headers:\n${headers.join(", ")}\n\nButuh minimal: time, open, high, low, close`);
+          return;
+        }
+
+        const key = (i)=> headers[i];
+        const candles = rows.map(r => ({
+          x: new Date(r[key(colTime)]),
+          o: +r[key(colOpen)],
+          h: +r[key(colHigh)],
+          l: +r[key(colLow)],
+          c: +r[key(colClose)]
+        })).filter(v => isFinite(v.o)&&isFinite(v.h)&&isFinite(v.l)&&isFinite(v.c));
+
+        const ctx = document.getElementById("candleChart").getContext("2d");
+        if(window.candleChart) window.candleChart.destroy();
+        window.candleChart = new Chart(ctx, {
+          type: 'candlestick',
+          data: { datasets: [{ label: "Candles", data: candles }] },
+          options: {
+            responsive: true,
+            plugins: { legend: { display: false }, tooltip:{mode:'index', intersect:false} },
+            scales: {
+              x: { type: 'time', ticks:{ color:"#94a3b8"}, grid:{ color:"#334155"} },
+              y: { ticks:{ color:"#94a3b8"}, grid:{ color:"#334155"} }
+            }
+          }
+        });
+      }catch(err){
+        showDebug("candleDebug","Candles - Error:", String(err));
+      }
+    }
+
+    // ---- Render SIGNALS ----
+    async function loadSignals(){
       try{
-        const signals = await loadCSV(SHEET_SIGNALS);
-        renderTable(signals);
-        renderActiveFromSignals(signals);
+        const rows = await parseCSV(SHEET_SIGNALS);
+        if(!rows || rows.length === 0) throw new Error("Signals CSV kosong");
+
+        const headers = Object.keys(rows[0]).map(h => h.trim());
+        const lower = headers.map(h=>h.toLowerCase());
+
+        const ci = {
+          time:  headerIndex(lower, ["time","timestamp","date"]),
+          pair:  headerIndex(lower, ["pair","symbol"]),
+          side:  headerIndex(lower, ["side","dir","direction"]),
+          price: headerIndex(lower, ["price","entry","close"]),
+          sl:    headerIndex(lower, ["sl","stop","stoploss","stop_loss"]),
+          tp1:   headerIndex(lower, ["tp1","takeprofit1","take_profit_1"]),
+          tp2:   headerIndex(lower, ["tp2","takeprofit2","take_profit_2"]),
+          tp3:   headerIndex(lower, ["tp3","takeprofit3","take_profit_3"]),
+          score: headerIndex(lower, ["score"]),
+          rsi:   headerIndex(lower, ["rsi"]),
+          vol:   headerIndex(lower, ["vol_ratio","vol","volume_ratio"]),
+          note:  headerIndex(lower, ["note","notes","remarks"])
+        };
+
+        const need = ["time","pair","side","price","sl","tp1","tp2","tp3","score","rsi","vol","note"];
+        if (need.some(k => ci[k]===null)){
+          showDebug("signalsDebug","Signals - Header tidak cocok:",
+            `Headers:\n${headers.join(", ")}\n\nButuh kolom (nama boleh bervariasi):\n${need.join(", ")}`);
+          return;
+        }
+
+        // isi detail aktif (row terakhir)
+        const key = (i)=> headers[i];
+        const last = rows[rows.length-1];
+        document.getElementById("signalDetail").innerHTML = `
+          <b>Pair:</b> ${last[key(ci.pair)]}<br/>
+          <b>Side:</b> <span class="${String(last[key(ci.side)]).toUpperCase()==="BUY"?"buy":"sell"}">${last[key(ci.side)]}</span><br/>
+          <b>Entry:</b> ${last[key(ci.price)]} &nbsp; | &nbsp; <b>SL:</b> ${last[key(ci.sl)]}<br/>
+          <b>TP1:</b> ${last[key(ci.tp1)]} &nbsp; <b>TP2:</b> ${last[key(ci.tp2)]} &nbsp; <b>TP3:</b> ${last[key(ci.tp3)]}<br/>
+          <b>Score:</b> ${last[key(ci.score)]} &nbsp; | &nbsp; <b>RSI:</b> ${last[key(ci.rsi)]} &nbsp; | &nbsp; <b>Vol:</b> ${last[key(ci.vol)]}<br/>
+          <b>Note:</b> ${last[key(ci.note)]}
+        `;
+
+        // isi tabel (10 terbaru)
+        const tbody = document.querySelector("#signalTable tbody");
+        tbody.innerHTML = "";
+        const latest = rows.slice(-10).reverse();
+        for (const r of latest){
+          const tr = document.createElement("tr");
+          const sideVal = String(r[key(ci.side)]).toUpperCase();
+          tr.innerHTML = `
+            <td>${r[key(ci.time)]}</td>
+            <td>${r[key(ci.pair)]}</td>
+            <td class="${sideVal==="BUY"?"buy":"sell"}">${r[key(ci.side)]}</td>
+            <td>${r[key(ci.price)]}</td>
+            <td>${r[key(ci.sl)]}</td>
+            <td>${r[key(ci.tp1)]}</td>
+            <td>${r[key(ci.tp2)]}</td>
+            <td>${r[key(ci.tp3)]}</td>
+            <td>${r[key(ci.score)]}</td>
+            <td>${r[key(ci.rsi)]}</td>
+            <td>${r[key(ci.vol)]}</td>
+            <td>${r[key(ci.note)]}</td>
+          `;
+          tbody.appendChild(tr);
+        }
+
         document.getElementById("signalsHint").textContent = "";
-      }catch(e){
-        console.warn("Signals CSV error:", e);
+      }catch(err){
         document.getElementById("signalsHint").textContent =
           "⚠️ Gagal memuat 'Signals'. Pastikan link CSV benar & public.";
+        showDebug("signalsDebug","Signals - Error:", String(err));
       }
+    }
+
+    async function refresh(){
+      await Promise.all([loadCandles(), loadSignals()]);
     }
 
     refresh();
