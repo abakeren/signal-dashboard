@@ -1,13 +1,15 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>Mini Signal Bot Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial"></script>
   <style>
     body { font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; margin:0; padding:20px; }
-    h1 { text-align: center; }
+    h1 { text-align: center; margin-bottom: 10px; }
+    .signal-box { background:#1e293b; padding:15px; border-radius:8px; margin-bottom:20px; }
     table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size:14px; }
     th, td { padding: 8px; border: 1px solid #334155; text-align: center; }
     th { background: #1e293b; }
@@ -18,29 +20,42 @@
 </head>
 <body>
   <h1>📊 Mini Signal Bot Dashboard</h1>
-  <p style="text-align:center">Data dari Google Sheets → update otomatis</p>
 
+  <!-- Active Signal Section -->
+  <div class="signal-box" id="activeSignal">
+    <h2>Active Signal</h2>
+    <canvas id="candleChart" height="200"></canvas>
+    <div id="signalDetail" style="margin-top:15px;"></div>
+  </div>
+
+  <!-- Table Section -->
+  <h2>Top 10 Signals</h2>
   <table id="signalTable">
     <thead>
       <tr>
-        <th>Time</th><th>Pair</th><th>Side</th><th>Entry</th><th>SL</th>
-        <th>TP1</th><th>TP2</th><th>TP3</th><th>Score</th><th>RSI</th><th>Vol</th><th>Note</th>
+        <th>Time</th><th>Pair</th><th>Side</th><th>Entry</th>
+        <th>SL</th><th>TP1</th><th>TP2</th><th>TP3</th>
+        <th>Score</th><th>RSI</th><th>Vol</th><th>Status</th>
       </tr>
     </thead>
     <tbody></tbody>
   </table>
 
   <script>
-    const SHEET_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1760384152&single=true&output=csv"; // <-- ganti link CSV dari publish Sheets
+    const SHEET_CSV = "PASTE_LINK_CSV_DISINI"; // ganti dengan link CSV publish Google Sheets (Signals)
 
     async function loadData(){
       const res = await fetch(SHEET_CSV);
       const text = await res.text();
       const rows = text.split("\n").map(r => r.split(","));
+      return rows;
+    }
+
+    function renderTable(rows){
       const tbody = document.querySelector("#signalTable tbody");
       tbody.innerHTML = "";
-      for (let i=1;i<rows.length;i++){
-        const r = rows[i];
+      const latest = rows.slice(1).reverse().slice(0,10); // ambil 10 sinyal terakhir
+      for (const r of latest){
         if(r.length < 10) continue;
         const tr = document.createElement("tr");
         tr.innerHTML = `
@@ -55,14 +70,55 @@
           <td>${r[9]}</td>
           <td>${r[10]}</td>
           <td>${r[12]}</td>
-          <td>${r[13]}</td>
+          <td>${r[14]}</td>
         `;
         tbody.appendChild(tr);
       }
     }
 
-    loadData();
-    setInterval(loadData, 60000); // auto refresh tiap 1 menit
+    function renderActive(rows){
+      const latest = rows[rows.length-1]; // baris terakhir
+      if(!latest || latest.length < 10) return;
+
+      // isi detail
+      document.getElementById("signalDetail").innerHTML = `
+        <b>Pair:</b> ${latest[1]} <br>
+        <b>Side:</b> ${latest[2]} <br>
+        <b>Entry:</b> ${latest[3]} | <b>SL:</b> ${latest[5]} <br>
+        <b>TP1:</b> ${latest[6]} | <b>TP2:</b> ${latest[7]} | <b>TP3:</b> ${latest[8]} <br>
+        <b>Score:</b> ${latest[9]} | <b>RSI:</b> ${latest[10]} | <b>Vol Ratio:</b> ${latest[12]} <br>
+        <b>Note:</b> ${latest[13]}
+      `;
+
+      // dummy chart candlestick (pakai entry/sl/tp buat ilustrasi aja)
+      const ctx = document.getElementById("candleChart").getContext("2d");
+      if(window.candleChart) window.candleChart.destroy();
+      window.candleChart = new Chart(ctx, {
+        type: 'candlestick',
+        data: {
+          datasets: [{
+            label: latest[1],
+            data: [
+              {x: new Date(), o: latest[3], h: latest[8], l: latest[5], c: latest[3]},
+            ],
+            borderColor: latest[2]==="BUY"?"#22c55e":"#ef4444"
+          }]
+        },
+        options: {
+          responsive: true,
+          scales: { x: {display: false} }
+        }
+      });
+    }
+
+    async function refresh(){
+      const rows = await loadData();
+      renderTable(rows);
+      renderActive(rows);
+    }
+
+    refresh();
+    setInterval(refresh, 60000); // auto refresh tiap 1 menit
   </script>
 </body>
 </html>
