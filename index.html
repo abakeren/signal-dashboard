@@ -4,16 +4,19 @@
   <meta charset="UTF-8">
   <title>Signal Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@3.3.0"></script>
+  <script>
+    Chart.register(window['chartjs-chart-financial'].CandlestickController, window['chartjs-chart-financial'].CandlestickElement);
+  </script>
   <style>
-    body { font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; margin:0; padding:20px; }
-    h1,h2 { text-align:center; }
-    .signal-box { background:#1e293b; padding:15px; border-radius:8px; margin-bottom:20px; }
-    table { width:100%; border-collapse: collapse; margin-top:20px; font-size:14px; }
-    th,td { padding:8px; border:1px solid #334155; text-align:center; }
-    th { background:#1e293b; }
-    tr:nth-child(even){ background:#1e293b; }
+    body { font-family: Arial, sans-serif; background:#0f172a; color:#f8fafc; margin:0; padding:20px; }
+    h1,h2{text-align:center;}
+    .signal-box{background:#1e293b; padding:15px; border-radius:8px; margin-bottom:20px;}
+    table{width:100%; border-collapse:collapse; margin-top:20px; font-size:14px;}
+    th,td{padding:8px; border:1px solid #334155; text-align:center;}
+    th{background:#1e293b;}
+    tr:nth-child(even){background:#1e293b;}
     .buy{color:#22c55e;font-weight:bold;}
     .sell{color:#ef4444;font-weight:bold;}
   </style>
@@ -21,7 +24,7 @@
 <body>
   <h1>📊 Mini Signal Bot Dashboard</h1>
 
-  <div class="signal-box" id="activeSignal">
+  <div class="signal-box">
     <h2>Active Signal</h2>
     <canvas id="candleChart" height="200"></canvas>
     <div id="signalDetail" style="margin-top:15px;"></div>
@@ -40,21 +43,21 @@
   </table>
 
   <script>
-    const SHEET_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1760384152&single=true&output=csv"; // ganti dengan link publish CSV
-    const BYBIT_API = "https://api.bybit.com/v5/market/kline?category=spot";
+    const SHEET_SIGNALS = "PASTE_LINK_SIGNALS_CSV";
+    const SHEET_CANDLES = "PASTE_LINK_CANDLES_CSV";
 
-    async function loadData(){
-      const res = await fetch(SHEET_CSV);
+    async function loadCSV(url){
+      const res = await fetch(url);
       const text = await res.text();
       return text.split("\n").map(r=>r.split(","));
     }
 
     function renderTable(rows){
-      const tbody = document.querySelector("#signalTable tbody");
+      const tbody=document.querySelector("#signalTable tbody");
       tbody.innerHTML="";
       const latest = rows.slice(1).reverse().slice(0,10);
       for(const r of latest){
-        if(r.length < 10) continue;
+        if(r.length<10) continue;
         const tr=document.createElement("tr");
         tr.innerHTML=`
           <td>${r[0]}</td>
@@ -74,52 +77,39 @@
       }
     }
 
-    async function renderActive(rows){
+    function renderActive(rows){
       const latest = rows[rows.length-1];
-      if(!latest || latest.length<10) return;
-      const pair = latest[1];
-      const side = latest[2];
-
-      document.getElementById("signalDetail").innerHTML = `
-        <b>Pair:</b> ${pair}<br>
-        <b>Side:</b> ${side}<br>
+      if(!latest||latest.length<10)return;
+      document.getElementById("signalDetail").innerHTML=`
+        <b>Pair:</b> ${latest[1]}<br>
+        <b>Side:</b> ${latest[2]}<br>
         <b>Entry:</b> ${latest[3]} | <b>SL:</b> ${latest[5]}<br>
         <b>TP1:</b> ${latest[6]} | <b>TP2:</b> ${latest[7]} | <b>TP3:</b> ${latest[8]}<br>
         <b>Score:</b> ${latest[9]} | <b>RSI:</b> ${latest[10]} | <b>Vol:</b> ${latest[12]}<br>
         <b>Note:</b> ${latest[13]}
       `;
+    }
 
-      // 🔹 ambil data candlestick dari Bybit
-      const url = `${BYBIT_API}&symbol=${pair}&interval=15&limit=50`;
-      const res = await fetch(url);
-      const js = await res.json();
-      const klines = js.result.list.reverse();
-
-      const candleData = klines.map(k => ({
-        x: new Date(+k[0]),
-        o: +k[1], h: +k[2], l: +k[3], c: +k[4]
+    function renderCandle(rows){
+      const candles = rows.slice(1).map(r=>({
+        x:new Date(r[0]),
+        o:+r[1],h:+r[2],l:+r[3],c:+r[4]
       }));
-
-      const ctx = document.getElementById("candleChart").getContext("2d");
+      const ctx=document.getElementById("candleChart").getContext("2d");
       if(window.candleChart) window.candleChart.destroy();
-      window.candleChart = new Chart(ctx, {
-        type: 'candlestick',
-        data: { datasets: [{ label: pair, data: candleData }] },
-        options: {
-          responsive: true,
-          plugins:{ legend:{display:false}},
-          scales: {
-            x: { ticks:{ color:"#94a3b8"}, grid:{color:"#334155"}},
-            y: { ticks:{ color:"#94a3b8"}, grid:{color:"#334155"}}
-          }
-        }
+      window.candleChart=new Chart(ctx,{
+        type:'candlestick',
+        data:{datasets:[{label:"Candles",data:candles}]},
+        options:{responsive:true,plugins:{legend:{display:false}}}
       });
     }
 
     async function refresh(){
-      const rows = await loadData();
-      renderTable(rows);
-      renderActive(rows);
+      const signals=await loadCSV(SHEET_SIGNALS);
+      const candles=await loadCSV(SHEET_CANDLES);
+      renderTable(signals);
+      renderActive(signals);
+      renderCandle(candles);
     }
 
     refresh();
