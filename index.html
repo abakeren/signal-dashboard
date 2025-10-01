@@ -1,1 +1,68 @@
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Mini Signal Bot Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; margin:0; padding:20px; }
+    h1 { text-align: center; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size:14px; }
+    th, td { padding: 8px; border: 1px solid #334155; text-align: center; }
+    th { background: #1e293b; }
+    tr:nth-child(even) { background: #1e293b; }
+    .buy { color: #22c55e; font-weight: bold; }
+    .sell { color: #ef4444; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>📊 Mini Signal Bot Dashboard</h1>
+  <p style="text-align:center">Data dari Google Sheets → update otomatis</p>
+
+  <table id="signalTable">
+    <thead>
+      <tr>
+        <th>Time</th><th>Pair</th><th>Side</th><th>Entry</th><th>SL</th>
+        <th>TP1</th><th>TP2</th><th>TP3</th><th>Score</th><th>RSI</th><th>Vol</th><th>Note</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    const SHEET_CSV = "PASTE_LINK_CSV_DISINI"; // <-- ganti link CSV dari publish Sheets
+
+    async function loadData(){
+      const res = await fetch(SHEET_CSV);
+      const text = await res.text();
+      const rows = text.split("\n").map(r => r.split(","));
+      const tbody = document.querySelector("#signalTable tbody");
+      tbody.innerHTML = "";
+      for (let i=1;i<rows.length;i++){
+        const r = rows[i];
+        if(r.length < 10) continue;
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${r[0]}</td>
+          <td>${r[1]}</td>
+          <td class="${r[2]==="BUY"?"buy":"sell"}">${r[2]}</td>
+          <td>${r[3]}</td>
+          <td>${r[5]}</td>
+          <td>${r[6]}</td>
+          <td>${r[7]}</td>
+          <td>${r[8]}</td>
+          <td>${r[9]}</td>
+          <td>${r[10]}</td>
+          <td>${r[12]}</td>
+          <td>${r[13]}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }
+
+    loadData();
+    setInterval(loadData, 60000); // auto refresh tiap 1 menit
+  </script>
+</body>
+</html>
