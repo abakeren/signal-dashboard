@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <title>Signal Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial"></script>
   <style>
     body { font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; margin:0; padding:20px; }
     h1,h2 { text-align:center; }
@@ -21,7 +23,8 @@
 
   <div class="signal-box" id="activeSignal">
     <h2>Active Signal</h2>
-    <div id="signalDetail"></div>
+    <canvas id="candleChart" height="200"></canvas>
+    <div id="signalDetail" style="margin-top:15px;"></div>
   </div>
 
   <h2>Top 10 Signals</h2>
@@ -38,6 +41,7 @@
 
   <script>
     const SHEET_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1760384152&single=true&output=csv"; // ganti dengan link publish CSV
+    const BYBIT_API = "https://api.bybit.com/v5/market/kline?category=spot";
 
     async function loadData(){
       const res = await fetch(SHEET_CSV);
@@ -70,17 +74,46 @@
       }
     }
 
-    function renderActive(rows){
+    async function renderActive(rows){
       const latest = rows[rows.length-1];
       if(!latest || latest.length<10) return;
+      const pair = latest[1];
+      const side = latest[2];
+
       document.getElementById("signalDetail").innerHTML = `
-        <b>Pair:</b> ${latest[1]}<br>
-        <b>Side:</b> ${latest[2]}<br>
+        <b>Pair:</b> ${pair}<br>
+        <b>Side:</b> ${side}<br>
         <b>Entry:</b> ${latest[3]} | <b>SL:</b> ${latest[5]}<br>
         <b>TP1:</b> ${latest[6]} | <b>TP2:</b> ${latest[7]} | <b>TP3:</b> ${latest[8]}<br>
         <b>Score:</b> ${latest[9]} | <b>RSI:</b> ${latest[10]} | <b>Vol:</b> ${latest[12]}<br>
         <b>Note:</b> ${latest[13]}
       `;
+
+      // 🔹 ambil data candlestick dari Bybit
+      const url = `${BYBIT_API}&symbol=${pair}&interval=15&limit=50`;
+      const res = await fetch(url);
+      const js = await res.json();
+      const klines = js.result.list.reverse();
+
+      const candleData = klines.map(k => ({
+        x: new Date(+k[0]),
+        o: +k[1], h: +k[2], l: +k[3], c: +k[4]
+      }));
+
+      const ctx = document.getElementById("candleChart").getContext("2d");
+      if(window.candleChart) window.candleChart.destroy();
+      window.candleChart = new Chart(ctx, {
+        type: 'candlestick',
+        data: { datasets: [{ label: pair, data: candleData }] },
+        options: {
+          responsive: true,
+          plugins:{ legend:{display:false}},
+          scales: {
+            x: { ticks:{ color:"#94a3b8"}, grid:{color:"#334155"}},
+            y: { ticks:{ color:"#94a3b8"}, grid:{color:"#334155"}}
+          }
+        }
+      });
     }
 
     async function refresh(){
