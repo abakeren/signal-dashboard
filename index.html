@@ -5,35 +5,39 @@
   <title>Mini Signal Bot Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <!-- Chart.js core -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
-  <!-- Time adapter (agar scale 'time' jalan) -->
+  <!-- Chart.js UMD (paling kompatibel) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <!-- Adapter time (date-fns) -->
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
-  <!-- Financial plugin (WAJIB pakai dist/*.min.js) -->
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@3.3.0/dist/chartjs-chart-financial.min.js"></script>
-  <!-- CSV parser -->
+  <!-- Financial plugin UMD -->
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@3.3.0/dist/index.umd.min.js"></script>
+  <!-- PapaParse -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 
   <script>
-    // Register semua kebutuhan Chart.js
-    const { TimeScale, LinearScale, Tooltip, Legend } = Chart;
+    // Register core scales & plugins
+    const { Chart, TimeScale, LinearScale, Tooltip, Legend } = window;
     Chart.register(TimeScale, LinearScale, Tooltip, Legend);
 
-    // Register financial controllers/elements
+    // Coba register financial plugin (UMD menaruh export pada window['chartjs-chart-financial'])
     (function registerFinancial(){
-      const F = window['chartjs-chart-financial'];
+      const F =
+        window['chartjs-chart-financial'] ||
+        window.chartjsChartFinancial ||
+        window.ChartjsChartFinancial;
+
       if (F && F.CandlestickController) {
         Chart.register(
           F.CandlestickController, F.CandlestickElement,
           F.OhlcController,        F.OhlcElement
         );
+        console.log('[financial] candlestick registered');
       } else {
-        console.error('Financial plugin gagal dimuat.');
+        console.warn('[financial] plugin not found – will line-chart fallback if needed');
       }
     })();
 
-    // sentinel chart instance
-    window.candleChart = null;
+    window.candleChart = null; // sentinel
   </script>
 
   <style>
@@ -58,7 +62,6 @@
   <div class="wrap grid">
     <h1>📊 Mini Signal Bot Dashboard</h1>
 
-    <!-- Active Signal -->
     <div class="card">
       <h2>Active Signal</h2>
       <canvas id="candleChart" height="220"></canvas>
@@ -66,7 +69,6 @@
       <div id="candleDebug" class="debug"></div>
     </div>
 
-    <!-- Table -->
     <div class="card">
       <h2>Top 10 Signals</h2>
       <table id="signalTable">
@@ -85,22 +87,20 @@
   </div>
 
   <script>
-    // ================== CONFIG LINK ==================
-    // Gunakan Publish-to-Web CSV (aman untuk fetch) + fallback gviz
+    // ======= LINKS (pakai publish-to-web + fallback gviz) =======
     const SHEET_ID = "1W_AOr_oATVQpmbbHh1agM42Wu8i5pJgqL3CUroyYLoM";
-
     const URLS = {
       candles: [
-        `https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1706276702&single=true&output=csv`,
+        "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1706276702&single=true&output=csv",
         `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=1706276702`,
       ],
       signals: [
-        `https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1760384152&single=true&output=csv`,
+        "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1760384152&single=true&output=csv",
         `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=1760384152`,
       ]
     };
 
-    // ================== HELPERS ==================
+    // ======= Fetch helpers (dengan proxy fallback supaya anti CORS) =======
     async function fetchTextWithFallback(urls) {
       const proxies = [
         null,
@@ -112,7 +112,7 @@
         for (const p of proxies) {
           const finalUrl = p ? p(url) : url;
           try {
-            const res = await fetch(finalUrl, { cache: "no-store" });
+            const res = await fetch(finalUrl, { cache:"no-store" });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             return await res.text();
           } catch (e) { lastErr = e; }
@@ -123,9 +123,8 @@
 
     async function parseCSVFrom(urlList, debugId){
       const txt = await fetchTextWithFallback(urlList);
-      // tampilkan preview 3 baris di debug box
       const dbg = document.getElementById(debugId);
-      if (dbg) { dbg.style.display = 'block'; dbg.textContent = `CSV preview:\n${txt.split("\n").slice(0,3).join("\n")}`; }
+      if (dbg) { dbg.style.display='block'; dbg.textContent = `CSV preview:\n${txt.split("\n").slice(0,3).join("\n")}`; }
       return new Promise((resolve, reject) => {
         Papa.parse(txt, { header:true, skipEmptyLines:true, complete:r=>resolve(r.data), error:reject });
       });
@@ -137,38 +136,24 @@
       return i>=0 ? i : null;
     }
 
-    // ================== CANDLES ==================
-    async function loadCandles(){
-      try{
-        const rows = await parseCSVFrom(URLS.candles, "candleDebug");
-        if(!rows.length) throw new Error("Candles CSV kosong");
+    // ======= Render Candles (dengan fallback line chart kalau plugin gagal) =======
+    function drawCandlesOrLine(ctx, rows, headers, idxs){
+      // siapkan data
+      const get = i => headers[i];
+      const points = rows.map(r=>({
+        t: new Date(r[get(idxs.time)]),
+        o: +r[get(idxs.open)], h:+r[get(idxs.high)], l:+r[get(idxs.low)], c:+r[get(idxs.close)]
+      })).filter(v=>isFinite(v.o)&&isFinite(v.h)&&isFinite(v.l)&&isFinite(v.c));
 
-        const headers = Object.keys(rows[0]).map(h=>h.trim());
-        const get = i => headers[i];
+      // jika candlestick belum terdaftar, fallback line close
+      const hasCandle = !!Chart.registry.controllers.get('candlestick');
 
-        const iTime  = colIdx(headers, ["time","timestamp","date"]);
-        const iOpen  = colIdx(headers, ["open","o"]);
-        const iHigh  = colIdx(headers, ["high","h"]);
-        const iLow   = colIdx(headers, ["low","l"]);
-        const iClose = colIdx(headers, ["close","c","price"]);
+      if (window.candleChart && typeof window.candleChart.destroy === "function") window.candleChart.destroy();
 
-        if([iTime,iOpen,iHigh,iLow,iClose].some(v=>v===null)){
-          document.getElementById("candleDebug").textContent =
-            "Candles header tidak cocok.\nHeaders: " + headers.join(", ");
-          return;
-        }
-
-        const data = rows.map(r=>({
-          x:new Date(r[get(iTime)]),
-          o:+r[get(iOpen)], h:+r[get(iHigh)], l:+r[get(iLow)], c:+r[get(iClose)]
-        })).filter(v=>isFinite(v.o)&&isFinite(v.h)&&isFinite(v.l)&&isFinite(v.c));
-
-        const ctx = document.getElementById("candleChart").getContext("2d");
-        if (window.candleChart && typeof window.candleChart.destroy === "function") window.candleChart.destroy();
-
+      if (hasCandle){
         window.candleChart = new Chart(ctx, {
           type:'candlestick',
-          data:{ datasets:[{ label:"Candles", data }] },
+          data:{ datasets:[{ label:"Candles", data: points.map(p=>({x:p.t,o:p.o,h:p.h,l:p.l,c:p.c})) }] },
           options:{
             responsive:true,
             plugins:{ legend:{display:false} },
@@ -178,19 +163,61 @@
             }
           }
         });
+      } else {
+        // fallback: line chart of close price
+        window.candleChart = new Chart(ctx, {
+          type:'line',
+          data:{ datasets:[{ label:"Close", data: points.map(p=>({x:p.t,y:p.c})) }] },
+          options:{
+            responsive:true,
+            elements:{ point:{ radius:0 } },
+            plugins:{ legend:{ display:false } },
+            scales:{
+              x:{ type:'time', ticks:{color:"#94a3b8"}, grid:{color:"#334155"} },
+              y:{ ticks:{color:"#94a3b8"}, grid:{color:"#334155"} }
+            }
+          }
+        });
+        document.getElementById("candleDebug").style.display='block';
+        document.getElementById("candleDebug").textContent =
+          'Financial plugin belum ter-register — ditampilkan fallback line chart.';
+      }
+    }
+
+    async function loadCandles(){
+      try{
+        const rows = await parseCSVFrom(URLS.candles, "candleDebug");
+        if(!rows.length) throw new Error("Candles CSV kosong");
+        const headers = Object.keys(rows[0]).map(h=>h.trim());
+
+        const idxs = {
+          time:  colIdx(headers, ["time","timestamp","date"]),
+          open:  colIdx(headers, ["open","o"]),
+          high:  colIdx(headers, ["high","h"]),
+          low:   colIdx(headers, ["low","l"]),
+          close: colIdx(headers, ["close","c","price"])
+        };
+        if (Object.values(idxs).some(v=>v===null)){
+          document.getElementById("candleDebug").style.display='block';
+          document.getElementById("candleDebug").textContent =
+            "Candles header tidak cocok.\nHeaders: " + headers.join(", ");
+          return;
+        }
+
+        const ctx = document.getElementById("candleChart").getContext("2d");
+        drawCandlesOrLine(ctx, rows, headers, idxs);
       }catch(e){
         const dbg = document.getElementById("candleDebug");
-        dbg.style.display = 'block';
+        dbg.style.display='block';
         dbg.textContent = "Candles Error:\n" + String(e);
       }
     }
 
-    // ================== SIGNALS ==================
+    // ======= Signals =======
     async function loadSignals(){
       try{
         const rows = await parseCSVFrom(URLS.signals, "signalsDebug");
         if(!rows.length) throw new Error("Signals CSV kosong");
-
         const headers = Object.keys(rows[0]).map(h=>h.trim());
         const get = i => headers[i];
 
@@ -209,7 +236,6 @@
           note:  colIdx(headers,["note","notes","remarks"])
         };
 
-        // Detail aktif
         const last = rows[rows.length-1];
         document.getElementById("signalDetail").innerHTML = `
           <b>Pair:</b> ${last[get(idx.pair)]}<br/>
@@ -220,7 +246,6 @@
           <b>Note:</b> ${last[get(idx.note)]}
         `;
 
-        // Tabel 10 terbaru
         const tbody = document.querySelector("#signalTable tbody");
         tbody.innerHTML = "";
         rows.slice(-10).reverse().forEach(r=>{
@@ -247,7 +272,7 @@
       }catch(e){
         document.getElementById("signalsHint").textContent = "⚠️ Gagal memuat 'Signals'.";
         const dbg = document.getElementById("signalsDebug");
-        dbg.style.display = 'block';
+        dbg.style.display='block';
         dbg.textContent = "Signals Error:\n" + String(e);
       }
     }
