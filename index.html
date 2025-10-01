@@ -16,8 +16,7 @@
       window['chartjs-chart-financial'].CandlestickController,
       window['chartjs-chart-financial'].CandlestickElement
     );
-    // init sentinel
-    window.candleChart = null;
+    window.candleChart = null; // sentinel
   </script>
   <style>
     :root { --bg:#0f172a; --card:#1e293b; --line:#334155; --muted:#94a3b8; --text:#f8fafc; --buy:#22c55e; --sell:#ef4444; }
@@ -34,22 +33,20 @@
     th{background:var(--card)}
     tr:nth-child(even){background:var(--card)}
     .muted{color:var(--muted)}
-    .debug{white-space:pre-wrap;font-family:ui-monospace,Consolas,monospace;background:#0b1222;border:1px solid #27354d;border-radius:8px;padding:10px;color:#cbd5e1}
+    .debug{white-space:pre-wrap;font-family:ui-monospace,Consolas,monospace;background:#0b1222;border:1px solid #27354d;border-radius:8px;padding:10px;color:#cbd5e1;display:none}
   </style>
 </head>
 <body>
   <div class="wrap grid">
     <h1>📊 Mini Signal Bot Dashboard</h1>
 
-    <!-- Active Signal -->
     <div class="card">
       <h2>Active Signal</h2>
       <canvas id="candleChart" height="220"></canvas>
       <div id="signalDetail" class="muted" style="margin-top:12px;"></div>
-      <div id="candleDebug" class="debug" style="margin-top:10px;display:none"></div>
+      <div id="candleDebug" class="debug"></div>
     </div>
 
-    <!-- Table -->
     <div class="card">
       <h2>Top 10 Signals</h2>
       <table id="signalTable">
@@ -63,110 +60,93 @@
         <tbody></tbody>
       </table>
       <div id="signalsHint" class="muted" style="margin-top:8px;"></div>
-      <div id="signalsDebug" class="debug" style="margin-top:10px;display:none"></div>
+      <div id="signalsDebug" class="debug"></div>
     </div>
   </div>
 
   <script>
-    // === CSV LINKS (pakai export?format=csv) ===
-    const SHEET_ID = "1W_AOr_oATVQpmbbHh1agM42Wu8i5pJgqL3CUroyYLoM";
-    const SHEET_CANDLES = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=1706276702`;
-    const SHEET_SIGNALS = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=1760384152`;
+    // === PUBLISH-TO-WEB CSV LINKS (punyamu) ===
+    const SHEET_CANDLES = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1706276702&single=true&output=csv";
+    const SHEET_SIGNALS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlYbUbL8Tn3CC0wcDXWs1uxsVKfpyvKFEzjZRyMyPmbXZKbqNjt2gcR3GHJ_8C4Ix6Cmm6OCMVQaQM/pub?gid=1760384152&single=true&output=csv";
 
+    // --- Utils ---
     function showDebug(id, title, content){
       const el = document.getElementById(id);
       el.style.display = 'block';
       el.textContent = `${title}\n${content}`;
     }
-
     async function parseCSV(url, debugId){
       const res = await fetch(url, { cache: "no-store" });
       const txt = await res.text();
-      if(!res.ok){ showDebug(debugId, `HTTP ${res.status}`, txt.slice(0,400)); throw new Error(`HTTP ${res.status}`); }
-      showDebug(debugId, "CSV preview (3 rows):", txt.split("\n").slice(0,3).join("\n"));
+      if(!res.ok){ showDebug(debugId, `HTTP ${res.status}`, txt.slice(0,300)); throw new Error(`HTTP ${res.status}`); }
       return new Promise((resolve, reject) => {
-        Papa.parse(txt, {
-          header: true, skipEmptyLines: true,
-          complete: r => resolve(r.data),
-          error: err => reject(err)
-        });
+        Papa.parse(txt, { header:true, skipEmptyLines:true, complete:r=>resolve(r.data), error:reject });
       });
     }
-
     function colIdx(headers, names){
       const lower = headers.map(h=> (h||"").toString().trim().toLowerCase());
       const i = lower.findIndex(h => names.includes(h));
-      return i >= 0 ? i : null;
+      return i>=0 ? i : null;
     }
 
+    // --- Candles ---
     async function loadCandles(){
       try{
         const rows = await parseCSV(SHEET_CANDLES, "candleDebug");
         if(!rows.length) throw new Error("Candles CSV kosong");
         const headers = Object.keys(rows[0]).map(h=>h.trim());
         const get = i => headers[i];
-
         const iTime  = colIdx(headers, ["time","timestamp","date"]);
         const iOpen  = colIdx(headers, ["open","o"]);
         const iHigh  = colIdx(headers, ["high","h"]);
         const iLow   = colIdx(headers, ["low","l"]);
         const iClose = colIdx(headers, ["close","c","price"]);
-
         if([iTime,iOpen,iHigh,iLow,iClose].some(v=>v===null)){
-          showDebug("candleDebug","Candles - Header tidak cocok", headers.join(", "));
+          showDebug("candleDebug","Candles header tidak cocok", headers.join(", "));
           return;
         }
-
         const data = rows.map(r=>({
-          x: new Date(r[get(iTime)]),
-          o: +r[get(iOpen)], h: +r[get(iHigh)], l: +r[get(iLow)], c: +r[get(iClose)]
+          x:new Date(r[get(iTime)]),
+          o:+r[get(iOpen)], h:+r[get(iHigh)], l:+r[get(iLow)], c:+r[get(iClose)]
         })).filter(v=>isFinite(v.o)&&isFinite(v.h)&&isFinite(v.l)&&isFinite(v.c));
-
         const ctx = document.getElementById("candleChart").getContext("2d");
-        // ⛑️ FIX: destroy hanya jika benar-benar Chart instance
-        if (window.candleChart && typeof window.candleChart.destroy === "function") {
-          window.candleChart.destroy();
-        }
+        if (window.candleChart && typeof window.candleChart.destroy === "function") window.candleChart.destroy();
         window.candleChart = new Chart(ctx, {
-          type: 'candlestick',
-          data: { datasets: [{ label: "Candles", data }] },
-          options: {
-            responsive: true,
-            plugins: { legend: { display:false } },
-            scales: {
-              x: { type:'time', ticks:{ color:"#94a3b8" }, grid:{ color:"#334155" } },
-              y: { ticks:{ color:"#94a3b8" }, grid:{ color:"#334155" } }
+          type:'candlestick',
+          data:{ datasets:[{ label:"Candles", data }] },
+          options:{
+            responsive:true,
+            plugins:{ legend:{display:false} },
+            scales:{
+              x:{ type:'time', ticks:{color:"#94a3b8"}, grid:{color:"#334155"} },
+              y:{ ticks:{color:"#94a3b8"}, grid:{color:"#334155"} }
             }
           }
         });
-      }catch(e){
-        showDebug("candleDebug","Candles - Error:", String(e));
-      }
+      }catch(e){ showDebug("candleDebug","Candles Error:", String(e)); }
     }
 
+    // --- Signals ---
     async function loadSignals(){
       try{
         const rows = await parseCSV(SHEET_SIGNALS, "signalsDebug");
         if(!rows.length) throw new Error("Signals CSV kosong");
         const headers = Object.keys(rows[0]).map(h=>h.trim());
         const get = i => headers[i];
-
         const idx = {
-          time:  colIdx(headers, ["time","timestamp","date"]),
-          pair:  colIdx(headers, ["pair","symbol"]),
-          side:  colIdx(headers, ["side","dir","direction"]),
-          price: colIdx(headers, ["price","entry"]),
-          sl:    colIdx(headers, ["sl","stop","stoploss","stop_loss"]),
-          tp1:   colIdx(headers, ["tp1","takeprofit1","take_profit_1"]),
-          tp2:   colIdx(headers, ["tp2","takeprofit2","take_profit_2"]),
-          tp3:   colIdx(headers, ["tp3","takeprofit3","take_profit_3"]),
-          score: colIdx(headers, ["score"]),
-          rsi:   colIdx(headers, ["rsi"]),
-          vol:   colIdx(headers, ["vol_ratio","vol","volume_ratio"]),
-          note:  colIdx(headers, ["note","notes","remarks"])
+          time:colIdx(headers,["time","timestamp","date"]),
+          pair:colIdx(headers,["pair","symbol"]),
+          side:colIdx(headers,["side","dir","direction"]),
+          price:colIdx(headers,["price","entry"]),
+          sl:colIdx(headers,["sl","stop","stoploss","stop_loss"]),
+          tp1:colIdx(headers,["tp1","takeprofit1","take_profit_1"]),
+          tp2:colIdx(headers,["tp2","takeprofit2","take_profit_2"]),
+          tp3:colIdx(headers,["tp3","takeprofit3","take_profit_3"]),
+          score:colIdx(headers,["score"]),
+          rsi:colIdx(headers,["rsi"]),
+          vol:colIdx(headers,["vol_ratio","vol","volume_ratio"]),
+          note:colIdx(headers,["note","notes","remarks"])
         };
-
-        // detail aktif
         const last = rows[rows.length-1];
         document.getElementById("signalDetail").innerHTML = `
           <b>Pair:</b> ${last[get(idx.pair)]}<br/>
@@ -176,8 +156,6 @@
           <b>Score:</b> ${last[get(idx.score)]} &nbsp; | &nbsp; <b>RSI:</b> ${last[get(idx.rsi)]} &nbsp; | &nbsp; <b>Vol:</b> ${last[get(idx.vol)]}<br/>
           <b>Note:</b> ${last[get(idx.note)]}
         `;
-
-        // tabel 10 terbaru
         const tbody = document.querySelector("#signalTable tbody");
         tbody.innerHTML = "";
         rows.slice(-10).reverse().forEach(r=>{
@@ -199,19 +177,14 @@
           `;
           tbody.appendChild(tr);
         });
-
         document.getElementById("signalsHint").textContent = "";
       }catch(e){
-        document.getElementById("signalsHint").textContent =
-          "⚠️ Gagal memuat 'Signals'. Pastikan link CSV benar & public.";
+        document.getElementById("signalsHint").textContent = "⚠️ Gagal memuat 'Signals'. Pastikan link CSV benar & public.";
         showDebug("signalsDebug","Signals Error:", String(e));
       }
     }
 
-    async function refresh(){
-      await Promise.all([loadCandles(), loadSignals()]);
-    }
-
+    async function refresh(){ await Promise.all([loadCandles(), loadSignals()]); }
     refresh();
     setInterval(refresh, 60000);
   </script>
